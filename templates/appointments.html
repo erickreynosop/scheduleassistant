@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Your Appointments</h1>
+
+  {% if appts|length == 0 %}
+    <p class="muted">You have no appointments yet.</p>
+    <div class="links" style="margin-top:12px;">
+      <a href="{{ url_for('create_appointment') }}">Create Appointment</a>
+      <a href="{{ url_for('main') }}">Back to main</a>
+    </div>
+  {% else %}
+    <div style="display:grid; gap:12px; margin-top:12px;">
+      {% for a in appts %}
+        <div class="card" style="padding:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <div>
+              <div style="font-weight:700; font-size:1.05rem;">
+                <span class="{{ 'canceled' if a.canceled else '' }}">
+                  {{ a.title }}
+                  {% if a.canceled %}
+                    <span class="pill pill-danger" title="Canceled">Canceled</span>
+                  {% endif %}
+                </span>
+              </div>
+              <div class="muted" style="margin-top:4px;">
+                {{ a.start_at.strftime("%b %d, %Y • %I:%M %p") }}
+              </div>
+              {% if a.services %}
+                <div class="{{ 'canceled' if a.canceled else '' }}" style="margin-top:6px;">Services: {{ a.services }}</div>
+              {% endif %}
+              {% if a.notes %}
+                <div class="muted {{ 'canceled' if a.canceled else '' }}" style="margin-top:6px;">Notes: {{ a.notes }}</div>
+              {% endif %}
+            </div>
+
+            {% if not a.canceled %}
+              <form method="post" action="{{ url_for('delete_appointment', appt_id=a.id) }}"
+                    onsubmit="return confirm('Delete this appointment?');">
+                <button type="submit" class="btn-danger">Delete</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="links" style="margin-top:12px;">
+      <a href="{{ url_for('create_appointment') }}">Create another</a>
+      <a href="{{ url_for('main') }}">Back to main</a>
+    </div>
+  {% endif %}
+{% endblock %}
