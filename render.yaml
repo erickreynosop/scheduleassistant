@@ -15,3 +15,9 @@ services:
         sync: false
       - key: TWILIO_FROM_NUMBER
         sync: false
+      - key: DATABASE_PATH
+        value: /var/data/site.db   # <— DB lives on the disk
+    disk:
+      name: data
+      mountPath: /var/data        # <— mount point for the disk
+      sizeGB: 1                   # free plan supports 1GB disk
