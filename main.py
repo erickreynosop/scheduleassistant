@@ -86,31 +86,43 @@ class Appointment(db.Model):
     user = db.relationship("User", backref=db.backref("appointments", lazy=True))
 
 
-# ---- Ensure tables exist + safe migrations for new columns ----
+# --- DB config ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB = os.path.join(BASE_DIR, "site.db")
+
+DATABASE_URL = os.environ.get("DATABASE_URL")  # e.g. postgresql://user:pass@host/db
+if DATABASE_URL:
+    # Render/Neon/Supabase use Postgres in prod
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+else:
+    # Local dev: SQLite file
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DEFAULT_DB}"
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db = SQLAlchemy(app)
+
+# --- Create tables + only run ALTERs on SQLite ---
 with app.app_context():
     db.create_all()
-    # add role if missing
-    try:
-        db.session.execute(text('ALTER TABLE "user" ADD COLUMN role VARCHAR(20) DEFAULT "user";'))
-        db.session.execute(text('UPDATE "user" SET role="user" WHERE role IS NULL;'))
-        db.session.commit()
-        print("Migration: added 'role' column to user.")
-    except Exception:
-        db.session.rollback()
-    # add canceled if missing
-    try:
-        db.session.execute(text('ALTER TABLE "appointment" ADD COLUMN canceled BOOLEAN DEFAULT 0;'))
-        db.session.commit()
-        print("Migration: added 'canceled' column to appointment.")
-    except Exception:
-        db.session.rollback()
-    # add phone to user if missing
-    try:
-        db.session.execute(text('ALTER TABLE "user" ADD COLUMN phone VARCHAR(32);'))
-        db.session.commit()
-        print("Migration: added 'phone' column to user.")
-    except Exception:
-        db.session.rollback()
+    if db.engine.dialect.name == "sqlite":
+        from sqlalchemy import text
+        try:
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN role VARCHAR(20) DEFAULT "user";'))
+            db.session.execute(text('UPDATE "user" SET role="user" WHERE role IS NULL;'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            db.session.execute(text('ALTER TABLE "appointment" ADD COLUMN canceled BOOLEAN DEFAULT 0;'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN phone VARCHAR(32);'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
 
 # ===========================
 #        ACCESS HELPERS
