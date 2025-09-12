@@ -39,12 +39,14 @@ def send_sms(to_number: str, body: str) -> bool:
         return False
 
 
-# ---- Database config (SQLite) ----
+# --- replace your current DB path block with this ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ABS_DB_PATH = os.path.join(BASE_DIR, "site.db")
+DEFAULT_DB = os.path.join(BASE_DIR, "site.db")
+ABS_DB_PATH = os.environ.get("DATABASE_PATH", DEFAULT_DB)  # <— use disk path if set
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{ABS_DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 print("Using DB at:", ABS_DB_PATH)
+
 
 db = SQLAlchemy(app)
 
