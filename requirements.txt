@@ -1,14 +1,8 @@
-Flask
-Flask-SQLAlchemy
-Werkzeug
-gunicorn
-twilio
-psycopg2-binary
-
-
 Flask==3.0.3
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.32
 gunicorn==21.2.0
 psycopg2-binary==2.9.9
 twilio==9.0.5
+psycopg2-binary==2.9.9
+Werkzeug
