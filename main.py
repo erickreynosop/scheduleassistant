@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import text
+from flask_migrate import Migrate
 import calendar as calmod
 import os
 
@@ -15,6 +16,12 @@ except Exception:
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+# --- Add this block ---
+db_url = os.getenv("DATABASE_URL", "sqlite:///local.db")
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+# ----------------------
 
 # ===========================
 #         DATABASE
@@ -39,6 +46,8 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 print("DB URI ->", app.config["SQLALCHEMY_DATABASE_URI"])
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)   # <-- add this line
+
 
 # ===========================
 #           MODELS
