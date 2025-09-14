@@ -10,50 +10,39 @@ import os
 # --- SMS (Twilio) ---
 try:
     from twilio.rest import Client
-except Exception:  # twilio not installed is OK — we’ll no-op send_sms
+except Exception:
     Client = None
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-# ---- Twilio config ----
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
-
-
-def send_sms(to_number: str, body: str) -> bool:
-    """
-    Send an SMS via Twilio. Returns True on success, False otherwise.
-    Gracefully no-ops if Twilio isn't configured or number is empty.
-    """
-    if not to_number or not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER):
-        return False
-    if Client is None:
-        return False
-    try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(to=to_number, from_=TWILIO_FROM_NUMBER, body=body)
-        return True
-    except Exception:
-        return False
-
-
-# --- replace your current DB path block with this ---
+# ===========================
+#         DATABASE
+# ===========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(BASE_DIR, "site.db")
-ABS_DB_PATH = os.environ.get("DATABASE_PATH", DEFAULT_DB)  # <— use disk path if set
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{ABS_DB_PATH}"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-print("Using DB at:", ABS_DB_PATH)
+LOCAL_SQLITE_PATH = os.path.join(BASE_DIR, "site.db")
 
+# Prefer DATABASE_URL (Render/Neon/Supabase). Fallback to local SQLite.
+raw_db_url = (os.environ.get("DATABASE_URL") or "").strip()
+if raw_db_url:
+    # Render/Supabase sometimes give postgres:// — SQLAlchemy wants postgresql://
+    if raw_db_url.startswith("postgres://"):
+        raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+    # Many hosted providers require SSL. Add if missing.
+    if raw_db_url.startswith("postgresql://") and "sslmode=" not in raw_db_url:
+        raw_db_url += ("&" if "?" in raw_db_url else "?") + "sslmode=require"
+    app.config["SQLALCHEMY_DATABASE_URI"] = raw_db_url
+else:
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{LOCAL_SQLITE_PATH}"
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+print("DB URI ->", app.config["SQLALCHEMY_DATABASE_URI"])
 
 db = SQLAlchemy(app)
 
 # ===========================
 #           MODELS
 # ===========================
-
 class User(db.Model):
     __tablename__ = "user"
     id = db.Column(db.Integer, primary_key=True)
@@ -61,9 +50,9 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # Access role: "user" (default) or "boss" (calendar-only view + cancel)
+    # Access role: "user" (default) or "boss"
     role = db.Column(db.String(20), default="user")
-    # phone for SMS (E.164 preferred, e.g. +15551234567)
+    # Optional phone (E.164 recommended, e.g. +15551234567)
     phone = db.Column(db.String(32))
 
     def set_password(self, raw_password: str):
@@ -80,32 +69,18 @@ class Appointment(db.Model):
     title = db.Column(db.String(200), nullable=False, default="Appointment")
     start_at = db.Column(db.DateTime, nullable=False)
     notes = db.Column(db.Text)
-    services = db.Column(db.Text)            # comma-separated list of selected services
-    canceled = db.Column(db.Boolean, default=False)  # soft cancel flag
+    # Comma-separated list of selected services
+    services = db.Column(db.Text)
+    # Soft cancel flag (for boss or customer)
+    canceled = db.Column(db.Boolean, default=False)
 
     user = db.relationship("User", backref=db.backref("appointments", lazy=True))
 
 
-# --- DB config ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(BASE_DIR, "site.db")
-
-DATABASE_URL = os.environ.get("DATABASE_URL")  # e.g. postgresql://user:pass@host/db
-if DATABASE_URL:
-    # Render/Neon/Supabase use Postgres in prod
-    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
-else:
-    # Local dev: SQLite file
-    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DEFAULT_DB}"
-
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db = SQLAlchemy(app)
-
-# --- Create tables + only run ALTERs on SQLite ---
+# Create tables; for SQLite dev DB only, run best-effort ALTERs (ignored on Postgres)
 with app.app_context():
     db.create_all()
     if db.engine.dialect.name == "sqlite":
-        from sqlalchemy import text
         try:
             db.session.execute(text('ALTER TABLE "user" ADD COLUMN role VARCHAR(20) DEFAULT "user";'))
             db.session.execute(text('UPDATE "user" SET role="user" WHERE role IS NULL;'))
@@ -123,11 +98,29 @@ with app.app_context():
         except Exception:
             db.session.rollback()
 
+# ===========================
+#        TWILIO HELPERS
+# ===========================
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
+
+def send_sms(to_number: str, body: str) -> bool:
+    """Send an SMS via Twilio. No-op/False if not configured."""
+    if not to_number or not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER):
+        return False
+    if Client is None:
+        return False
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(to=to_number, from_=TWILIO_FROM_NUMBER, body=body)
+        return True
+    except Exception:
+        return False
 
 # ===========================
 #        ACCESS HELPERS
 # ===========================
-
 def is_logged_in():
     return "user_id" in session
 
@@ -137,7 +130,7 @@ def is_boss():
 def block_boss_only(fn):
     """
     If a user is 'boss' (calendar-only), redirect them to the calendar.
-    Use this on routes bosses should NOT access.
+    Use on routes bosses should NOT access.
     """
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -150,8 +143,6 @@ def block_boss_only(fn):
 # ===========================
 #           ROUTES
 # ===========================
-
-# ---- Sign in (Home) ----
 @app.route("/", methods=["GET", "POST"])
 def home():
     if request.method == "POST":
@@ -167,22 +158,18 @@ def home():
             flash("Invalid credentials.")
             return render_template("home.html")
 
-        # Save user info in session
         session["user_id"] = user.id
         session["user_name"] = user.fullname
         session["role"] = (user.role or "user")
 
-        # Boss lands on calendar directly
         if is_boss():
             today = date.today()
             return redirect(url_for("calendar_view", year=today.year, month=today.month))
-
         return redirect(url_for("main"))
 
     return render_template("home.html")
 
 
-# ---- Main page ----
 @app.route("/main")
 @block_boss_only
 def main():
@@ -192,7 +179,6 @@ def main():
     return render_template("main.html", name=session.get("user_name"), is_boss=is_boss())
 
 
-# ---- Logout ----
 @app.route("/logout")
 def logout():
     session.clear()
@@ -200,7 +186,6 @@ def logout():
     return redirect(url_for("home"))
 
 
-# ---- Create Account ----
 @app.route("/create-account", methods=["GET", "POST"])
 @block_boss_only
 def create_account():
@@ -221,7 +206,7 @@ def create_account():
             flash("That email is already registered.")
             return render_template("create_account.html")
 
-        user = User(fullname=fullname, email=email, phone=phone or None)  # role defaults to "user"
+        user = User(fullname=fullname, email=email, phone=phone or None)  # defaults role="user"
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
@@ -232,7 +217,6 @@ def create_account():
     return render_template("create_account.html")
 
 
-# ---- Forgot Password (stub) ----
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "POST":
@@ -245,8 +229,8 @@ def forgot_password():
     return render_template("forgot_password.html")
 
 
-# ---- Create Appointment (customer) ----
-@app.route("/appointments/new", methods=["GET", "POST"], endpoint="create_appointment")
+# -------- Appointments (customer) --------
+@app.route("/appointments/new", methods=["GET", "POST"])
 @block_boss_only
 def create_appointment():
     if not is_logged_in():
@@ -254,7 +238,6 @@ def create_appointment():
         return redirect(url_for("home"))
 
     if request.method == "POST":
-        # Expecting checkboxes named "services" (accordion groups) and an optional 'special_request'
         services_list = request.form.getlist("services")
         special_request = (request.form.get("special_request", "") or "").strip()
         if special_request:
@@ -266,7 +249,6 @@ def create_appointment():
 
         date_str = request.form.get("date", "").strip()
         time_str = request.form.get("time", "").strip()
-
         try:
             start_at = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
         except ValueError:
@@ -274,7 +256,6 @@ def create_appointment():
             return render_template("create_appointment.html")
 
         services_str = ", ".join(services_list)
-        # a simple title: use first service if present
         title = services_list[0] if services_list else "Appointment"
 
         appt = Appointment(
@@ -290,11 +271,9 @@ def create_appointment():
         flash("Appointment created!")
         return redirect(url_for("main"))
 
-    # GET
     return render_template("create_appointment.html")
 
 
-# ---- List Appointments (customer) ----
 @app.route("/appointments")
 @block_boss_only
 def list_appointments():
@@ -310,7 +289,6 @@ def list_appointments():
     return render_template("appointments.html", appts=appts)
 
 
-# ---- Customer: cancel Appointment (soft cancel) ----
 @app.route("/appointments/<int:appt_id>/cancel", methods=["POST"])
 @block_boss_only
 def customer_cancel_appointment(appt_id):
@@ -333,8 +311,8 @@ def customer_cancel_appointment(appt_id):
     return redirect(url_for("list_appointments"))
 
 
-# ---- Hard delete (boss/admin only) ----
-@app.route("/appointments/<int:appt_id>/delete", methods=["POST"], endpoint="delete_appointment")
+# Hard delete (boss only)
+@app.route("/appointments/<int:appt_id>/delete", methods=["POST"])
 def delete_appointment(appt_id):
     if not is_logged_in():
         flash("Please log in first.")
@@ -353,7 +331,7 @@ def delete_appointment(appt_id):
     return redirect(url_for("calendar_view"))
 
 
-# ---- Boss: mark appointment canceled (soft) + SMS notify user ----
+# Boss: soft-cancel + SMS
 @app.route("/boss/appointments/<int:appt_id>/cancel", methods=["POST"])
 def boss_cancel(appt_id):
     if not is_logged_in() or not is_boss():
@@ -369,21 +347,18 @@ def boss_cancel(appt_id):
         appt.canceled = True
         db.session.commit()
 
-        # Build a friendly message
         dt_str = appt.start_at.strftime("%b %d, %Y at %I:%M %p")
-        name = appt.user.fullname
         body = (
-            f"Hi {name}, your appointment on {dt_str} has been canceled. "
+            f"Hi {appt.user.fullname}, your appointment on {dt_str} has been canceled. "
             f"If you'd like to reschedule, please reply or book again."
         )
-        # Try sending SMS (non-blocking failure)
         sent = send_sms(appt.user.phone, body)
         if not sent:
             flash("Appointment canceled, but SMS notification could not be sent (check Twilio config or phone).")
     else:
         flash("This appointment was already canceled.")
 
-    # return to same month if provided
+    # stay on same month if provided
     y = request.args.get("year")
     m = request.args.get("month")
     if y and m:
@@ -395,7 +370,7 @@ def boss_cancel(appt_id):
     return redirect(url_for("calendar_view"))
 
 
-# ---- Calendar View (all logged-in users) ----
+# Calendar view (boss sees all; users see only their own)
 @app.route("/calendar")
 def calendar_view():
     if not is_logged_in():
@@ -417,7 +392,6 @@ def calendar_view():
     month_start = datetime(year, month, 1)
     month_end = datetime(year + (month // 12), (month % 12) + 1, 1)
 
-    # Boss sees ALL appointments; users see only their own
     base_q = Appointment.query.filter(
         Appointment.start_at >= month_start,
         Appointment.start_at < month_end
@@ -447,7 +421,6 @@ def calendar_view():
         next_month=next_month,
         is_boss=is_boss(),
     )
-
 
 if __name__ == "__main__":
     app.run(debug=True)
